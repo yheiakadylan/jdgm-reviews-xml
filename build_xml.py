@@ -8,8 +8,8 @@ import xml.etree.ElementTree as ET
 
 API = "https://api.judge.me/api/v1/widgets/all_reviews_page"
 
-SHOP_DOMAIN       = os.getenv("SHOP_DOMAIN", "").strip()
-JDGM_PUBLIC_TOKEN = os.getenv("JDGM_PUBLIC_TOKEN", "").strip()
+SHOP_DOMAIN       = os.getenv("SHOP_DOMAIN", "8a11fj-t2.myshopify.com").strip()
+JDGM_PUBLIC_TOKEN = os.getenv("JDGM_PUBLIC_TOKEN", "_7T7TEaf5XXCEfRMv9_Pz04eS0Q").strip()
 REVIEW_TYPE       = os.getenv("REVIEW_TYPE", "product-reviews").strip()
 PAGE_START        = int(os.getenv("PAGE_START", "1"))
 PAGE_LIMIT        = int(os.getenv("PAGE_LIMIT", "9999"))
