@@ -1,0 +1,53 @@
+name: Build & Publish JDGM XML (Python)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 17 * * *"   # mỗi ngày 00:00 VN (cron là UTC)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build XML
+        env:
+          SHOP_DOMAIN: ${{ secrets.SHOP_DOMAIN }}
+          JDGM_PUBLIC_TOKEN: ${{ secrets.JDGM_PUBLIC_TOKEN }}
+          REVIEW_TYPE: ${{ secrets.REVIEW_TYPE || 'product-reviews' }}
+          PAGE_LIMIT: ${{ secrets.PAGE_LIMIT || 9999 }}
+          PAGE_DELAY_MS: ${{ secrets.PAGE_DELAY_MS || 200 }}
+        run: python build_xml.py
+
+      - name: Upload artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
