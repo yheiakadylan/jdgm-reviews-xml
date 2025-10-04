@@ -1,8 +1,9 @@
 name: Build & Publish JDGM XML (Python)
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 17 * * *"   # mỗi ngày 00:00 VN (cron là UTC)
+    - cron: "0 17 * * *"   # 00:00 VN (cron dùng UTC)
 
 permissions:
   contents: read
@@ -37,7 +38,13 @@ jobs:
           PAGE_DELAY_MS: ${{ secrets.PAGE_DELAY_MS || 200 }}
         run: python build_xml.py
 
-      - name: Upload artifact for Pages
+      - name: Upload debug/artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/**
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
