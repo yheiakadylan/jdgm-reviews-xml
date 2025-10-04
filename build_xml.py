@@ -1,89 +1,74 @@
-# build_xml.py — build 1 file: dist/jdgm-reviews.xml
-import os, time, sys
+# build_xml.py — debug mạnh
+import os, sys, time, re
 from pathlib import Path
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
-import re
 
 API = "https://api.judge.me/api/v1/widgets/all_reviews_page"
 
-SHOP_DOMAIN       = os.getenv("SHOP_DOMAIN", "").strip()            # *.myshopify.com
+SHOP_DOMAIN       = os.getenv("SHOP_DOMAIN", "").strip()
 JDGM_PUBLIC_TOKEN = os.getenv("JDGM_PUBLIC_TOKEN", "").strip()
-REVIEW_TYPE       = os.getenv("REVIEW_TYPE", "product-reviews").strip()  # product-reviews | shop-reviews | both
+REVIEW_TYPE       = os.getenv("REVIEW_TYPE", "product-reviews").strip()
 PAGE_START        = int(os.getenv("PAGE_START", "1"))
 PAGE_LIMIT        = int(os.getenv("PAGE_LIMIT", "9999"))
-PAGE_DELAY_MS     = float(os.getenv("PAGE_DELAY_MS", "200"))  # ms
+PAGE_DELAY_MS     = float(os.getenv("PAGE_DELAY_MS", "200"))
 
-def dbg(msg): print(f"[DEBUG] {msg}")
+def log(msg): print(f"[DEBUG] {msg}")
 
 if not SHOP_DOMAIN or not JDGM_PUBLIC_TOKEN:
     print("Missing SHOP_DOMAIN or JDGM_PUBLIC_TOKEN")
     sys.exit(1)
 
-def fetch_page(page, review_type):
+def fetch_page(page, rtype):
     params = {
         "shop_domain": SHOP_DOMAIN,
         "api_token": JDGM_PUBLIC_TOKEN,
         "page": str(page),
-        "review_type": review_type
+        "review_type": rtype
     }
     r = requests.get(API, params=params, timeout=60)
     ct = (r.headers.get("content-type") or "").lower()
-    dbg(f"GET {r.url} -> {r.status_code} ({ct})")
+    url_no_token = r.url.replace(JDGM_PUBLIC_TOKEN, "*****")
+    log(f"GET {url_no_token} -> {r.status_code} ({ct})")
     r.raise_for_status()
     if "application/json" in ct:
         j = r.json()
-        return str(j.get("html") or j.get("widget") or j.get("data") or "")
+        body = (j.get("html") or j.get("widget") or j.get("data") or "")
+        if not body:
+            # nếu json không có html, ta lưu raw json cho bạn xem
+            body = str(j)
+        return body
     return r.text
 
-def extract_reviews(html, dump_path=None):
-    if dump_path:
-        Path(dump_path).write_text(html, encoding="utf-8", errors="ignore")
+def extract_nodes(html):
     soup = BeautifulSoup(html or "", "lxml")
     return soup.select(".jdgm-rev")
 
-def parse_review(node, rtype):
-    def text(sels):
-        for sel in sels:
-            el = node.select_one(sel)
+def parse_node(node, rtype):
+    def txt(sels):
+        for s in sels:
+            el = node.select_one(s)
             if el and el.get_text(strip=True):
                 return el.get_text(" ", strip=True)
         return ""
     rating = node.get("data-rating","")
-    if not rating:
-        aria = node.get("aria-label","")
-        m = re.search(r"([1-5])\s*star", aria or "", re.I)
+    if not rating and node.has_attr("aria-label"):
+        m = re.search(r"([1-5])\s*star", node["aria-label"], re.I)
         rating = m.group(1) if m else ""
-    prod   = node.select_one(".jdgm-rev__prod-link, .jdgm-rev__product")
-    product_title = prod.get_text(" ", strip=True) if prod else ""
     link = node.select_one(".jdgm-rev__prod-link")
-    product_url = link.get("href","") if link else ""
-
     return {
         "type": "shop" if rtype=="shop-reviews" else "product",
         "rating": rating or "",
-        "title": text([".jdgm-rev__title"]),
-        "body":  text([".jdgm-rev__body", ".jdgm-rev__content"]),
-        "author":text([".jdgm-rev__author"]),
-        "created_at": text([".jdgm-rev__timestamp", ".jdgm-rev__date"]),
-        "product_title": product_title,
-        "product_url": product_url,
+        "title": txt([".jdgm-rev__title"]),
+        "body":  txt([".jdgm-rev__body",".jdgm-rev__content"]),
+        "author":txt([".jdgm-rev__author"]),
+        "created_at": txt([".jdgm-rev__timestamp",".jdgm-rev__date"]),
+        "product_title": txt([".jdgm-rev__prod-link",".jdgm-rev__product"]),
+        "product_url": (link.get("href") if link else ""),
         "photos": [img.get("src") for img in node.select("img") if img.get("src")]
     }
-
-def crawl_one_type(rtype, dbg_dir):
-    rows = []
-    for p in range(PAGE_START, PAGE_LIMIT+1):
-        html = fetch_page(p, rtype)
-        dump = str(dbg_dir / f"raw_page{p}_{rtype}.html") if p == 1 else None
-        nodes = extract_reviews(html, dump_path=dump)
-        dbg(f"{rtype} page {p}: found {len(nodes)} .jdgm-rev")
-        if not nodes: break
-        rows += [parse_review(n, rtype) for n in nodes]
-        time.sleep(PAGE_DELAY_MS/1000.0)
-    return rows
 
 def build_xml(rows):
     root = ET.Element("reviews", attrib={"generated_at": datetime.utcnow().isoformat(), "total": str(len(rows))})
@@ -93,21 +78,38 @@ def build_xml(rows):
             ET.SubElement(rev, k).text = r[k] or ""
         if r["photos"]:
             photos = ET.SubElement(rev, "photos")
-            for u in r["photos"]: ET.SubElement(photos, "photo").text = u
+            for u in r["photos"]:
+                ET.SubElement(photos, "photo").text = u
     return ET.ElementTree(root)
+
+def crawl_type(rtype, out_dir):
+    rows = []
+    for p in range(PAGE_START, PAGE_LIMIT+1):
+        body = fetch_page(p, rtype)
+        if p == 1:
+            # luôn ghi trang 1 để bạn mở xem
+            (out_dir / f"raw_page1_{rtype}.body").write_text(body, encoding="utf-8", errors="ignore")
+            log(f"Saved debug: {out_dir/f'raw_page1_{rtype}.body'} (len={len(body)})")
+        nodes = extract_nodes(body)
+        log(f"{rtype} page {p}: found {len(nodes)} .jdgm-rev")
+        if not nodes:
+            break
+        rows += [parse_node(n, rtype) for n in nodes]
+        time.sleep(PAGE_DELAY_MS/1000.0)
+    return rows
 
 def main():
     out = Path("dist"); out.mkdir(exist_ok=True)
-    dbg_dir = out / "debug"; dbg_dir.mkdir(exist_ok=True)
+    dbg = out / "debug"; dbg.mkdir(exist_ok=True)
 
     types = ["product-reviews","shop-reviews"] if REVIEW_TYPE=="both" else [REVIEW_TYPE]
     allrows = []
-    for t in types: allrows += crawl_one_type(t, dbg_dir)
+    for t in types:
+        allrows += crawl_type(t, dbg)
 
-    tree = build_xml(allrows)
-    outfile = out / "jdgm-reviews.xml"
-    tree.write(outfile, encoding="utf-8", xml_declaration=True)
-    print(f"✓ wrote {outfile} with {len(allrows)} reviews")
+    xml_path = out / "jdgm-reviews.xml"
+    build_xml(allrows).write(xml_path, encoding="utf-8", xml_declaration=True)
+    print(f"✓ wrote {xml_path} with {len(allrows)} reviews")
 
 if __name__ == "__main__":
     main()
